@@ -1,0 +1,57 @@
+
+#!/bin/bash
+
+# === CONFIGURATION ===
+LOG_TXT="/var/log/lockwatcher.log"
+LOG_CSV="$HOME/lockwatcher.csv"
+TELEGRAM_TOKEN="7723354229:AAGKqU2KQogCKKVednSmaIRL0KRgp0NbZ-4"
+TELEGRAM_CHAT_ID="1219018671"
+EMAIL_TO="muhammadyoquboff@gmail.com"
+FILTER_ROOT_ONLY=false
+
+RED="\e[91m"; GREEN="\e[92m"; YELLOW="\e[93m"; END="\e[0m"
+
+echo -e "${GREEN}[✓] LockWatcher Ultimate ishga tushdi...${END}"
+
+if [ ! -f "$LOG_CSV" ]; then
+    echo "Time,User,TTY,IP,Action,RawLog" > "$LOG_CSV"
+fi
+
+send_telegram() {
+    curl -s -X POST https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage         -d chat_id=$TELEGRAM_CHAT_ID         -d parse_mode=Markdown         -d text="$1" > /dev/null
+}
+
+send_email() {
+    echo -e "$2\n\nRaw Log:\n$3" | mail -s "$1" "$EMAIL_TO"
+}
+
+tail -Fn0 /var/log/auth.log | while read line; do
+    if echo "$line" | grep -E "sudo|su|authentication failure|invalid password" >/dev/null; then
+        time=$(echo "$line" | awk '{print $1, $2, $3}')
+        user=$(echo "$line" | grep -oP '(user=)?\b\w+\b(?=( :| ;))' | head -n1)
+        tty=$(echo "$line" | grep -oP 'TTY=[^ ;]+' | cut -d= -f2)
+        ip=$(echo "$line" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
+        action=$(echo "$line" | grep -Eo 'sudo|su|authentication failure|invalid password' | head -n1)
+
+        [[ -z "$user" ]] && user="unknown"
+        [[ -z "$tty" ]] && tty="unknown"
+        [[ -z "$ip" ]] && ip="local"
+
+        if \$FILTER_ROOT_ONLY && [[ "$user" != "root" ]]; then
+            continue
+        fi
+
+        msg="🛡 *LockWatcher Alert* 🛑\n*👤 :* $user\n*⏱ Sana:* $time\n*📟 TTY:* $tty\n*🌐 IP:* $ip\n*🔐 Harakat:* $action"
+
+        echo -e "${RED}$msg${END}"
+        echo -e "$msg\n$line\n----------------" >> "$LOG_TXT"
+        echo "\"$time\",\"$user\",\"$tty\",\"$ip\",\"$action\",\"$line\"" >> "$LOG_CSV"
+
+        send_telegram "$msg"
+        send_email "LockWatcher Alert: $user tried $action" "$msg" "$line"
+
+        if [[ ! -z "$DISPLAY" ]] && command -v notify-send >/dev/null; then
+            notify-send "🛡 LockWatcher Alert" "$user tried $action on $tty"
+        fi
+    fi
+done
